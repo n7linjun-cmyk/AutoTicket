@@ -1,0 +1,6 @@
+# Extra dependencies only needed for development/experiments,
+# NOT needed to run the deployed Streamlit app (app.py).
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+
+sentence-transformers   # only used by compare_models.py
+scipy                   # only used by investigate_priority_labels.py
