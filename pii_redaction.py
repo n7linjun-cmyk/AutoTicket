@@ -101,6 +101,16 @@ def redact_pii(text: str):
     Returns (redacted_text, counts) where counts is a dict like
     {"email": 1, "phone": 0, "card": 0, "order_ref": 2} recording how many
     matches of each category were masked. Safe on empty/None-ish input.
+
+    Input : text (str, or None / "" which return ("", all-zero counts)).
+    Output: (str, dict) -- the dict always has the four keys "email",
+            "phone", "card" and "order_ref" (ints >= 0); masked spans are
+            replaced by [EMAIL], [PHONE], [CARD] and [REF#].
+    Order of passes (matters, see comments below): email -> card ->
+    order/reference -> phone.
+    Known gaps (documented, not bugs): personal names and street addresses
+    are NOT detected -- that needs a real NER model.
+    Never raises on any str; idempotent (re-redacting masked text is a no-op).
     """
     if not text:
         return text or "", {k: 0 for k in REDACTION_LABELS}

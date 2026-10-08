@@ -96,6 +96,23 @@ def clean_text(text: str) -> str:
 
 
 def main():
+    """
+    Train and save the production models.
+
+    Input : optional CLI arg = path to a CSV with columns ticket_text,
+            priority, department (and optionally priority_verified); the
+            default is data/support_tickets_real_v2.csv.
+    Output: prints classification reports and confusion matrices for the
+            held-out 20% split, then writes to models/:
+              vectorizer.pkl              TfidfVectorizer (1-2 grams, English stop words)
+              priority_model.pkl          CalibratedClassifierCV(LinearSVC)
+              department_model.pkl        same, class_weight="balanced"
+              department_explain_coef.pkl {"coef", "classes"} for explanations
+    Reproducibility: random_state=42, stratified on department.
+    Error boundary: raises if the CSV is missing or lacks those columns
+    (pandas KeyError / FileNotFoundError) -- fail loudly, never train on
+    partial data.
+    """
     data_path = sys.argv[1] if len(sys.argv) > 1 else DATA_PATH
     df = pd.read_csv(data_path)
     print(f"Loaded {len(df)} rows from {data_path}")

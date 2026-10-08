@@ -8,6 +8,32 @@ tickets, plus a couple of adjacent cases found while writing these
 (HTML/script content, URL-only text) that turned out to expose real bugs
 -- see the "insufficient_text" and extract_topic notes below.
 
+What these tests do and do not cover
+-------------------------------------
+They test ROBUSTNESS and ERROR BOUNDARIES of the pipeline (predict_demo.py
+and pii_redaction.py): that odd input never crashes it, that the output
+always has the documented shape, and that known failure modes stay fixed.
+They do NOT measure model accuracy -- that is evaluated separately on a
+held-out split (train_model_v3.py, report Section 12). They load the
+trained files in models/, so run them from the project root.
+
+Test groups (in file order) and the failure each one guards against:
+  1. Empty / whitespace / punctuation / number-only / year-only / single
+     character  -> must be flagged insufficient_text with confidence 0.0
+     (previously reported ~79% "confidence" from class priors alone).
+  2. Emoji-only and emoji mixed with text -> flagged only when no real
+     words remain.
+  3. Non-English and mixed-language text -> no crash; partial signal from
+     any English words.
+  4. Very long text (~5,000 words) -> no crash, topic capped at
+     MAX_TOPIC_LEN, draft stays a reasonable size.
+  5. HTML/script and URL-only text -> markup never reflected into the
+     draft; bare URL rejected as a topic.
+  6. PII redaction (email, phone, card, order/reference numbers) -> each
+     masked, unrelated numbers left alone, and PII never appears in a
+     draft response; includes the regression where an email's own period
+     used to split it mid-address.
+
 Run:  python -m pytest test_edge_cases.py -v
   or: python test_edge_cases.py   (plain-assert fallback, no pytest needed)
 """

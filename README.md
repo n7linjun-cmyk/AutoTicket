@@ -45,6 +45,9 @@ python test_edge_cases.py
 python -m pytest test_edge_cases.py -v
 ```
 
+Run from the project root (the tests load `models/*.pkl`). Currently
+**40 tests, all passing**. See [Testing](#testing) for what they cover.
+
 ---
 
 ## How it works
@@ -119,6 +122,143 @@ latest accuracy-improvement pass — see `Final_Project_Report.docx`.
 4. **Explainability** — "Why this department?" shows the exact words that
    drove the prediction, computed directly from the linear model's learned
    weights (not an approximation like LIME/SHAP).
+
+## Interfaces (no web API, no database)
+
+This project is a **Streamlit app (`app.py`) calling a Python module
+(`predict_demo.py`)**. There are **no REST endpoints and no database server**.
+The "API" is the set of functions below and the "database" is a set of CSV
+and pickle files (next section).
+
+| Function (module) | Input | Output | Behaviour on bad input |
+|---|---|---|---|
+| `clean_text(text)` (`predict_demo`) | `str` | lower-cased `str`: URLs removed, only `a-z0-9` and spaces kept | Any `str` is safe; emoji, punctuation and non-Latin text become `""` |
+| `has_signal(cleaned)` (`predict_demo`) | cleaned `str` | `bool`: True if at least one recognised *alphabetic* token | Returns False for `""`, digits-only, emoji-only |
+| `predict_ticket(raw_text)` (`predict_demo`) | `str` | `(priority, department)` | No signal check; use the next function for anything user-facing |
+| `predict_ticket_with_confidence(raw_text)` (`predict_demo`) | `str` | `dict`: `priority`, `priority_confidence`, `department`, `department_confidence`, `insufficient_text` | Never raises; no-signal text gives `insufficient_text=True` and confidences `0.0` |
+| `explain_department_prediction(raw_text, top_n=6)` (`predict_demo`) | `str`, `int` | `list[(word, contribution)]` | Returns `[]` when no word contributed |
+| `extract_topic(raw_text)` (`predict_demo`) | `str` | `str`, at most 150 chars (+ `...`) | Returns `""` for bare URLs, junk or empty text; strips HTML and `{placeholders}`; masks PII |
+| `draft_response(priority, department, raw_text="")` (`predict_demo`) | labels + optional text | multi-line draft `str` | `KeyError` only if given a label the models can never emit |
+| `redact_pii(text)` (`pii_redaction`) | `str` or `None` | `(masked_text, counts)`; counts has keys `email`, `phone`, `card`, `order_ref` | Never raises; names and addresses are **not** detected |
+| `has_pii(text)` (`pii_redaction`) | `str` | `bool` | Same as above |
+| `save_correction(...)` (`app.py`) | ticket text, predicted and corrected department, predicted priority | appends one row to `corrections.csv` | OS errors (permissions, read-only disk) propagate to the page |
+
+Example:
+
+```python
+from predict_demo import predict_ticket_with_confidence, draft_response
+r = predict_ticket_with_confidence("I was charged twice for my invoice")
+# {'priority': 'High', 'priority_confidence': 0.61,
+#  'department': 'Billing', 'department_confidence': 0.95,
+#  'insufficient_text': False}
+print(draft_response(r["priority"], r["department"], "I was charged twice for my invoice"))
+```
+
+Scripts and their command lines:
+
+| Script | Purpose | Command |
+|---|---|---|
+| `app.py` | Web UI | `streamlit run app.py` |
+| `train_model_v3.py` | Train and save models | `python train_model_v3.py [optional_csv]` |
+| `merge_corrections.py` | Merge agent corrections into a new training CSV | `python merge_corrections.py [--corrections F] [--base F] [--output F]` |
+| `try_ticket.py` | Interactive CLI tester | `python try_ticket.py` |
+
+## Data schema
+
+**Training data: `data/support_tickets_real_v2.csv`** (12,122 rows)
+
+| Column | Type | Values |
+|---|---|---|
+| `ticket_text` | text | Subject + ". " + body (English only) |
+| `priority` | category | `High` (5,561), `Medium` (4,782), `Low` (1,779) |
+| `department` | category | `Technical support` (10,204), `Billing` (1,562), `Delivery` (356) |
+
+**Feedback log: `corrections.csv`** (created by the app on first correction;
+git-ignored; plain text, PII-masked)
+
+| Column | Type | Notes |
+|---|---|---|
+| `timestamp` | ISO-8601 string | Local time of submission |
+| `ticket_text` | text | Emails, phones, cards and order/reference numbers masked |
+| `predicted_priority` | category | Model output (never human-corrected) |
+| `predicted_department` | category | Model output |
+| `corrected_department` | category | Agent's choice; equals the prediction when confirmed |
+
+**Merged training file: `data/support_tickets_real_v2_with_corrections.csv`**
+(written by `merge_corrections.py`). It has the three training columns plus
+`source` (`original` or `correction`) and `priority_verified` (`True` for
+original rows, `False` for correction rows, because priority is never checked
+by a human). `train_model_v3.py` trains the priority model only on
+`priority_verified=True` rows and the department model on all rows.
+
+**Model artifacts: `models/`**
+
+| File | Contents |
+|---|---|
+| `vectorizer.pkl` | `TfidfVectorizer`, 1-2 grams, English stop words, about 77,800 features |
+| `priority_model.pkl` | `CalibratedClassifierCV(LinearSVC)` |
+| `department_model.pkl` | Same, with `class_weight="balanced"` |
+| `department_explain_coef.pkl` | `{"coef": averaged coefficients, "classes": labels}` for the explanation panel |
+
+## Error boundaries
+
+Where each unusual input is caught, what the user sees, and which test
+protects it.
+
+| Input condition | Caught in | Behaviour | Test(s) |
+|---|---|---|---|
+| Blank input in the UI | `app.py` | Warning shown; pipeline not run | (UI, manual) |
+| Empty, whitespace, punctuation, digits-only, year-only or one-letter text | `has_signal` | `insufficient_text=True`, confidence `0.0`, red banner in the UI | `test_empty_string_*`, `test_whitespace_only_*`, `test_punctuation_only_*`, `test_numbers_only_*`, `test_year_only_*`, `test_single_character_*` |
+| Emoji-only text | `clean_text` then `has_signal` | Same as above | `test_emoji_only_*` |
+| Emoji mixed with real words | `has_signal` | Not flagged; predicted normally | `test_emoji_mixed_with_real_text_*` |
+| Non-English or mixed-language text | pipeline | No crash; partial signal from English words; documented as unreliable | `test_non_english_*`, `test_mixed_language_*` |
+| Confidence below 0.60 | `app.py` (`CONFIDENCE_THRESHOLD`) | "Needs a second look" warning; number never shown | (UI, manual) |
+| Very long text (about 5,000 words) | `extract_topic` | Topic capped at 150 chars with `...`; draft stays small | `test_very_long_text_*` |
+| HTML or `<script>` in the ticket | `extract_topic` | Tags stripped before the text is quoted in the draft | `test_html_script_is_not_reflected_into_draft` |
+| URL-only ticket | `extract_topic` | Topic rejected; generic opening used | `test_url_only_*` |
+| PII in the ticket (email, phone, card, order/ref number) | `redact_pii`, called from `extract_topic` and `save_correction` | Masked as `[EMAIL]`, `[PHONE]`, `[CARD]`, `[REF#]` before it is quoted or stored | `test_redact_pii_*`, `test_draft_response_never_contains_raw_*` |
+| Email containing a period at a split point | `extract_topic` (redacts before cutting) | Email fully masked | `test_extract_topic_does_not_truncate_email_at_its_own_period` |
+| Corrections file with missing columns | `merge_corrections.load_corrections` | `ValueError` naming the columns | `test_corrections_file_missing_columns_raises_value_error` |
+| Corrections rows with blank text, invalid labels or duplicates | `merge_corrections.main` | Rows dropped and counted in the printed summary | `test_blank_ticket_text_*`, `test_invalid_*`, `test_duplicate_ticket_*`, `test_correction_already_in_base_*` |
+| Training CSV missing or malformed | `train_model_v3.main` | Raises; nothing is trained or saved | (manual) |
+
+Not handled (known gaps): personal names and street addresses in free text;
+concurrent writes to `corrections.csv`; non-English tickets (low accuracy).
+
+## Testing
+
+`test_edge_cases.py` has **40 unit tests** for pipeline robustness, and
+`test_merge_corrections.py` has **10 unit tests** for the feedback-merge script
+(50 in total). They check
+that odd input never crashes the pipeline, that results always have the
+documented shape (valid labels, confidences between 0 and 1, a boolean
+`insufficient_text`), and that bugs found earlier stay fixed. They do **not**
+measure model accuracy; that is evaluated on a held-out split (see Current
+results).
+
+| Area | What is checked |
+|---|---|
+| Empty and no-signal text | Flagged `insufficient_text`, confidence forced to `0.0` (regression: used to report about 79% from class priors) |
+| Emoji | No crash; flagged only when no real words remain |
+| Non-English and mixed text | No crash; mixed text keeps partial signal |
+| Short and long text | Single words and 5,000-word tickets work; topic and draft sizes are bounded |
+| HTML and URLs | Markup never echoed into a draft; bare URLs rejected |
+| PII redaction | Each category masked, unrelated numbers left alone, no PII in drafts, trailing punctuation preserved |
+
+The merge tests use small temporary CSVs, so they never touch `data/` or the
+real `corrections.csv`, and they do not need the trained models. They check
+that a missing file or missing columns is handled, that blank text, invalid
+labels, duplicates and rows already in the base data are dropped, that merged
+rows get `priority_verified=False`, and that re-running does not double-count.
+
+Run both files: `python -m pytest -v`, or without pytest:
+`python test_edge_cases.py && python test_merge_corrections.py`.
+
+How to add a test: write a function named `test_<what>_<expected>` in
+`test_edge_cases.py` (it will be picked up by both runners), build the input,
+call the function under test, and `assert` on the documented output shape.
+
+---
 
 ## Known limitations
 
@@ -203,6 +343,7 @@ support_ticket_project/
 ├── prepare_real_dataset_v2.py      CURRENT dataset harmonization
 ├── test_edge_cases.py              Edge-case tests (empty/emoji/non-English/
 │                                    short/long/HTML/URL-only input)
+├── test_merge_corrections.py       Unit tests for merge_corrections.py (bad/duplicate rows)
 ├── try_ticket.py                   Interactive CLI tester
 ├── requirements.txt                App-only deps
 ├── requirements-dev.txt            Dev-only deps (embeddings comparison, chi-square test)

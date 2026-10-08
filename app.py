@@ -86,6 +86,20 @@ DEPARTMENTS = ["Billing", "Technical support", "Delivery"]
 def save_correction(ticket_text, predicted_department, corrected_department, predicted_priority):
     """Suggestion #3: append agent corrections to a CSV for future retraining.
 
+    Storage schema (corrections.csv, created with a header on first write,
+    appended thereafter -- this is the project's only runtime "database"):
+        timestamp             ISO-8601 local time of the submission
+        ticket_text           PII-masked ticket text
+        predicted_priority    High | Medium | Low   (model output)
+        predicted_department  Billing | Technical support | Delivery (model output)
+        corrected_department  same values (agent's choice; equal to the
+                              prediction when the agent confirms it)
+    Error boundary: no locking, so this is single-user safe only; an OS
+    error (read-only disk, permissions) propagates and Streamlit shows it
+    in the page. Only the department is ever corrected -- priority is
+    stored as predicted, which is why merge_corrections.py tags merged
+    rows priority_verified=False.
+
     ticket_text is redacted (pii_redaction.redact_pii) before it's written:
     emails, phone numbers, card numbers, and order/account/reference
     numbers are masked, since this file is a plain-text CSV on disk with
@@ -103,6 +117,15 @@ def save_correction(ticket_text, predicted_department, corrected_department, pre
                           predicted_department, corrected_department])
 
 
+# ---- Error boundaries in the request flow (top to bottom) -----------------
+#  1. Blank / whitespace input      -> warning, pipeline is not run.
+#  2. No usable words (emoji, digits, punctuation) -> insufficient_text
+#     error banner; confidences forced to 0.0 upstream.
+#  3. Confidence < CONFIDENCE_THRESHOLD -> "needs a second look" warning
+#     (the number itself is never shown to the agent).
+#  4. Medium/Low priority           -> reminder that priority is the weaker task.
+#  5. No explainable words          -> "extra caution" message instead of a list.
+# PII is masked before anything is quoted in the draft or written to disk.
 if run:
     if not ticket_text.strip():
         st.warning("Please paste some ticket text first.")

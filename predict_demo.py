@@ -31,6 +31,22 @@ NEXT_STEPS = {
 
 
 def clean_text(text: str) -> str:
+    """
+    Normalise raw ticket text into the form the TF-IDF vectorizer was
+    trained on (must stay identical to clean_text in train_model_v3.py,
+    otherwise training and inference see different tokens).
+
+    Steps, in order: lowercase -> drop URLs (http..., www...) -> replace
+    every character that is not a-z, 0-9 or whitespace with a space (this
+    also removes emoji, accents and all non-Latin scripts) -> collapse
+    whitespace.
+
+    Input : str. (Passing None raises AttributeError -- callers are expected
+            to pass a string; the app guards empty input before calling.)
+    Output: str, possibly "" (empty, whitespace-only, emoji-only and
+            punctuation-only input all clean down to ""). Never raises on
+            any str, however long or unusual.
+    """
     text = text.lower()
     text = re.sub(r"http\S+|www\S+", " ", text)
     text = re.sub(r"[^a-z0-9\s]", " ", text)
@@ -75,6 +91,16 @@ def has_signal(cleaned_text: str) -> bool:
 
 
 def predict_ticket(raw_text: str):
+    """
+    Minimal prediction: returns the (priority, department) label pair.
+
+    Input : raw ticket text (str).
+    Output: tuple (priority, department), e.g. ("High", "Billing").
+    Error boundary: NONE -- unlike predict_ticket_with_confidence this does
+    not check has_signal, so on empty / no-vocabulary text it returns the
+    model's class-prior guess with no warning. Use
+    predict_ticket_with_confidence anywhere the result is shown to a user.
+    """
     cleaned = clean_text(raw_text)
     vec = vectorizer.transform([cleaned])
     priority = priority_model.predict(vec)[0]
@@ -96,6 +122,19 @@ def predict_ticket_with_confidence(raw_text: str):
     ignore the flag don't break), but confidence is forced to 0.0 rather
     than a misleadingly high probability the model would otherwise report,
     since there's nothing meaningful in the text driving the prediction.
+
+    Input : raw ticket text (str); any string is accepted.
+    Output: dict with exactly these keys
+        priority              str   one of "High" | "Medium" | "Low"
+        priority_confidence   float 0.0-1.0 (calibrated probability of the
+                                    winning class; 0.0 if insufficient_text)
+        department            str   one of "Billing" | "Technical support"
+                                    | "Delivery"
+        department_confidence float same as priority_confidence
+        insufficient_text     bool  True when has_signal() is False
+    Error boundary: never raises on odd text (see test_edge_cases.py). The
+    caller (app.py) decides what to do with insufficient_text and with
+    confidences below CONFIDENCE_THRESHOLD (0.60).
     """
     cleaned = clean_text(raw_text)
     vec = vectorizer.transform([cleaned])
@@ -141,6 +180,12 @@ def explain_department_prediction(raw_text: str, top_n: int = 6):
     Returns a list of (word, contribution) tuples, sorted by contribution
     descending, for words that pushed the prediction TOWARD the winning
     class. Only returns words that literally appear in this ticket.
+
+    Input : raw ticket text (str); top_n = max number of words returned.
+    Output: list[(str, float)], at most top_n items, possibly EMPTY.
+    Error boundary: empty / no-signal text gives an all-zero vector, hence
+    no contributing words and an empty list (never an exception). The app
+    shows a "no single strong keyword" message for the empty case.
     """
     cleaned = clean_text(raw_text)
     vec = vectorizer.transform([cleaned])
@@ -215,6 +260,14 @@ def extract_topic(raw_text: str) -> str:
       - A topic that is only a URL is rejected outright, since
         otherwise "http://example.com/track?order=123" would either be
         echoed verbatim or truncated into a meaningless fragment.
+
+    Input : raw ticket text (str).
+    Output: str of at most MAX_TOPIC_LEN (150) chars plus an optional
+            trailing "..."; "" when nothing usable remains.
+    Error boundaries handled here (each has a test in test_edge_cases.py):
+      PII -> masked; HTML/script tags -> stripped; {placeholders} ->
+      stripped; bare URL -> ""; < 3 chars or no 3-letter word -> "";
+      over-long text -> truncated at a sentence or word boundary.
     """
     # Redact PII across the WHOLE ticket before anything else -- see the
     # docstring note above on why this order matters.
@@ -261,6 +314,16 @@ def draft_response(priority: str, department: str, raw_text: str = "") -> str:
     with any existing call sites that only pass priority/department.
     When provided, the draft references the specific complaint instead of
     only the routing labels — the #1 complaint from user_validation.md.
+
+    Input : priority in SLA's keys ("High"|"Medium"|"Low"); department in
+            NEXT_STEPS' keys ("Billing"|"Technical support"|"Delivery");
+            raw_text optional.
+    Output: multi-line str -- greeting, opening line (quotes the extracted
+            topic when there is one), next-step sentence, SLA promise, sign-off.
+    Error boundary: a priority or department outside those keys raises
+    KeyError. That cannot happen with model output, because the classifiers
+    only emit the known labels; it would only occur on a hand-made call.
+    The quoted topic is already PII-masked and tag-stripped by extract_topic.
     """
     topic = extract_topic(raw_text) if raw_text else ""
 

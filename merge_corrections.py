@@ -49,6 +49,17 @@ VALID_PRIORITIES = {"High", "Medium", "Low"}
 
 
 def load_corrections(path: str) -> pd.DataFrame:
+    """
+    Read corrections.csv (schema defined by app.save_correction):
+    timestamp, ticket_text, predicted_priority, predicted_department,
+    corrected_department.
+
+    Error boundaries: a missing file returns an empty frame with those
+    columns (the merge then just re-writes the base dataset); a file that
+    lacks any expected column raises ValueError rather than silently
+    mis-reading it. Row-level cleaning (blank text, invalid labels,
+    duplicates) happens later in main().
+    """
     if not os.path.exists(path):
         print(f"No corrections file found at {path} -- nothing to merge.")
         return pd.DataFrame(columns=[
