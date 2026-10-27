@@ -80,6 +80,25 @@ def load_corrections(path: str) -> pd.DataFrame:
 
 
 def main():
+    """
+    Build the merged training CSV from base dataset + corrections.csv.
+
+    Input : command-line flags --base, --corrections, --output (all
+            optional; defaults are the module constants above).
+    Output: writes the merged CSV to --output with the columns
+            ticket_text, priority, department, source ("original" or
+            "correction") and priority_verified (True for base rows,
+            False for correction rows), then prints a summary.
+    Cleaning order (each step is counted in the printed summary):
+            blank text -> invalid labels -> duplicate tickets (latest
+            wins) -> text already present in the base dataset.
+    Idempotent: the output is always rebuilt from the base file, never
+    appended to a previous output, so re-running cannot double-count.
+    Error boundaries: a missing corrections file just rewrites the base
+    dataset; a corrections file with missing columns raises ValueError
+    (see load_corrections); a missing --base file raises
+    FileNotFoundError.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corrections", default=CORRECTIONS_FILE,
                          help=f"Path to corrections CSV (default: {CORRECTIONS_FILE})")

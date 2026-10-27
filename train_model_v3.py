@@ -49,9 +49,13 @@ NOT adopted:
     over the TF-IDF-only baseline -- the signal they were meant to add
     was apparently already captured by the word features.
 
-Honest ceiling: cross-validated priority macro-F1 is now ~0.75 (up from
-~0.57), department ~0.91-0.92 (up from ~0.90 on this same uncapped-vocab
-comparison, ~0.83 vs. the original 3000-feature production baseline).
+Honest ceiling: with 5-fold cross-validation, priority macro-F1 is now
+~0.75 (up from ~0.57 for the old 3000-feature cap) and department macro-F1
+is ~0.91-0.92 (up from ~0.90 for the same cap). On the single held-out 20%
+split reported in the README, the original production baseline scored
+Priority 0.61 accuracy / 0.51 macro-F1 and Department 0.92 / 0.83, versus
+0.76 / 0.74 and 0.97 / 0.91 for this version. (CV and held-out-split numbers
+are different measurements and are not directly interchangeable.)
 Priority remains the weaker task -- see the report for why (Low-priority
 recall in particular, and the inherent label noise already documented in
 Section 4/5).
@@ -88,6 +92,17 @@ DATA_PATH = "data/support_tickets_real_v2.csv"
 
 
 def clean_text(text: str) -> str:
+    """
+    Normalise raw ticket text for TF-IDF.
+
+    Input : any str.
+    Output: lower-cased str with URLs removed, every character outside
+            a-z, 0-9 and whitespace replaced by a space, and runs of
+            whitespace collapsed to one space.
+    NOTE: must stay identical to predict_demo.clean_text -- the vectorizer
+    is fitted on this output, so any difference between the two would
+    silently shift the features the models see at prediction time.
+    """
     text = text.lower()
     text = re.sub(r"http\S+|www\S+", " ", text)
     text = re.sub(r"[^a-z0-9\s]", " ", text)
@@ -198,12 +213,12 @@ def main():
         [cc.estimator.coef_ for cc in department_model.calibrated_classifiers_], axis=0
     )
     dep_classes = department_model.classes_
+    os.makedirs("models", exist_ok=True)  # must exist before ANY dump below
     joblib.dump(
         {"coef": dep_coefs, "classes": dep_classes},
         "models/department_explain_coef.pkl",
     )
 
-    os.makedirs("models", exist_ok=True)
     joblib.dump(vectorizer, "models/vectorizer.pkl")
     joblib.dump(priority_model, "models/priority_model.pkl")
     joblib.dump(department_model, "models/department_model.pkl")
